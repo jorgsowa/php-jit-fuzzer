@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       php-branch:
-        description: php-src branch to test (default: all of PHP-8.4, PHP-8.5, master)
+        description: 'php-src branch to test (default: all of PHP-8.4, PHP-8.5, master)'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
