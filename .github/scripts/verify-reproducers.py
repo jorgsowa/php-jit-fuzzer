@@ -2,10 +2,11 @@
 """Confirm phpt reproducers: --EXPECT-- must match a clean run and the affected --INI-- config must break it.
 
 The phpt's opcache.jit value decides the category: off means an optimizer bug (clean run: no opcache),
-anything else a JIT bug (clean run: opcache.jit=off).
+anything else a JIT bug (clean run: opcache.jit=off). Exits 1 while any reproducer still breaks PHP or cannot be judged.
 """
 
 import argparse
+import difflib
 import json
 import os
 import re
@@ -21,6 +22,9 @@ BASE_INI = [
 ]
 CLEAN_INI = {"optimizer": ["opcache.enable=0", "opcache.enable_cli=0"], "jit": ["opcache.jit=off"]}
 JIT_OFF = {"off", "disable", "0"}
+FAILING = {"confirmed", "flaky", "inconclusive", "error"}
+STATUS_ICON = {"confirmed": "❌", "flaky": "⚠️", "inconclusive": "❓", "error": "❓", "not-reproduced": "✅"}
+MAX_BLOCK = 20000
 PROBE = """<?php
 $s = opcache_get_status(false);
 echo json_encode(["opcache" => $s["opcache_enabled"] ?? false, "jit" => $s["jit"]["on"] ?? false]);
@@ -140,10 +144,13 @@ def verify(php, phpt, extra_ini, repeats, timeout, workdir, outdir):
     with open(src, "w", encoding="utf-8") as f:
         f.write(sections["FILE"])
     name = os.path.splitext(os.path.basename(phpt))[0]
-    result = {"category": cat, "test": sections["TEST"].strip()}
+    expected = sections.get("EXPECT", sections.get("EXPECTF"))
+    result = {"category": cat, "test": sections["TEST"].strip(), "ini": ini, "expected": expected}
 
     cleans = [run_php(php, src, clean, timeout) for _ in range(repeats)]
     dump(os.path.join(outdir, f"{name}.clean.txt"), cleans[0])
+    result["clean"] = [run_info(r, failure(r) or (None if matches_expect(sections, r[1]) else "output"))
+                       for r in cleans]
     problems = {failure(r) for r in cleans} - {None}
     if problems:
         return dict(result, status="inconclusive", detail=f"clean run fails: {', '.join(sorted(problems))}")
@@ -152,17 +159,25 @@ def verify(php, phpt, extra_ini, repeats, timeout, workdir, outdir):
     if not matches_expect(sections, cleans[0][1]):
         return dict(result, status="inconclusive", detail="clean run does not match --EXPECT--")
 
-    kinds = []
+    runs, dumped = [], False
     for _ in range(repeats):
         res = run_php(php, src, affected, timeout)
         kind = failure(res) or (None if matches_expect(sections, res[1]) else "output")
-        if kind and not any(kinds):
+        if kind and not dumped:
             dump(os.path.join(outdir, f"{name}.affected.txt"), res)
-        kinds.append(kind)
-    hits = [k for k in kinds if k]
+            dumped = True
+        runs.append(run_info(res, kind))
+    result["affected"] = runs
+    hits = [r["kind"] for r in runs if r["kind"]]
     status = "confirmed" if len(hits) == repeats else "flaky" if hits else "not-reproduced"
     detail = f"{'/'.join(sorted(set(hits)))} ({len(hits)}/{repeats})" if hits else "-"
     return dict(result, status=status, detail=detail)
+
+
+def run_info(res, kind):
+    if res is None:
+        return {"kind": kind, "rc": None, "stdout": "", "stderr": "<timeout>"}
+    return {"kind": kind, "rc": res[0], "stdout": res[1], "stderr": res[2]}
 
 
 def dump(path, res):
@@ -171,6 +186,57 @@ def dump(path, res):
             f.write("<timeout>\n")
         else:
             f.write(f"{res[1]}\n--- stderr ---\n{res[2]}\n--- rc={res[0]} ---\n")
+
+
+def clip(text, limit=MAX_BLOCK):
+    return text if len(text) <= limit else text[:limit] + f"\n... ({len(text) - limit} more bytes, see artifact)"
+
+
+def fence(text, lang=""):
+    # A longer fence than any backtick run inside keeps the block intact.
+    ticks = "`" * max(3, max((len(m) for m in re.findall(r"`+", text)), default=0) + 1)
+    return f"{ticks}{lang}\n{text}\n{ticks}"
+
+
+def example_run(r):
+    """The run that best shows the result: the first failing affected run, else the first one."""
+    runs = r.get("affected") or r.get("clean") or []
+    return next((x for x in runs if x["kind"]), runs[0] if runs else None)
+
+
+def report(phpt, r):
+    lines = [f"#### `{phpt}`: {r['status']}", "", f"**{r.get('test') or '?'}** ({r['category']}): {r['detail']}", ""]
+    if r.get("ini"):
+        lines += ["INI:", fence("\n".join(r["ini"]), "ini"), ""]
+    for label, key in (("Clean", "clean"), ("Affected", "affected")):
+        if r.get(key):
+            kinds = ", ".join(f"rc={x['rc']} {x['kind'] or 'ok'}" for x in r[key])
+            lines.append(f"- {label} runs: {kinds}")
+    lines.append("")
+    run = example_run(r)
+    if run and r.get("expected") is not None:
+        diff = difflib.unified_diff(r["expected"].replace("\r\n", "\n").rstrip().splitlines(),
+                                    run["stdout"].replace("\r\n", "\n").rstrip().splitlines(),
+                                    "expected", "actual", lineterm="")
+        diff = "\n".join(diff)
+        if diff:
+            lines += ["Output diff:", fence(clip(diff), "diff"), ""]
+        else:
+            lines += ["Output matches expected.", ""]
+    if run and run["stderr"].strip():
+        lines += ["stderr:", fence(clip(run["stderr"].rstrip())), ""]
+    return "\n".join(lines) + "\n"
+
+
+def annotate(phpt, r):
+    level = "error" if r["status"] in FAILING else "notice"
+    msg = escape(f"{r['status']} [{r['category']}] {r['detail']}")
+    title = escape(r.get("test") or phpt).replace(":", "%3A").replace(",", "%2C")
+    print(f"::{level} file={phpt},title={title}::{msg}", flush=True)
+
+
+def escape(text):
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
 def main():
@@ -186,6 +252,7 @@ def main():
     version = subprocess.run([a.php, "-n", "-r", 'echo PHP_VERSION, PHP_DEBUG ? " debug" : "";'],
                              capture_output=True, text=True, timeout=60).stdout.strip()
     workdir = tempfile.mkdtemp(prefix="reproducers-")
+    in_ci = bool(os.environ.get("GITHUB_ACTIONS"))
 
     rows = []
     for phpt in a.phpts:
@@ -195,18 +262,29 @@ def main():
             r = {"category": "?", "test": "", "status": "error", "detail": str(e)}
         rows.append((phpt, r))
         print(f"{phpt}: {r['status']} [{r['category']}] {r['detail']}", flush=True)
+        if in_ci:
+            print(f"::group::{phpt} details")
+        print(report(phpt, r), flush=True)
+        if in_ci:
+            print("::endgroup::")
+            annotate(phpt, r)
 
-    md = [f"### Reproducers on PHP {version}", "", f"Each config ran {a.repeats}x.", "",
+    failing = [p for p, r in rows if r["status"] in FAILING]
+    md = [f"### Reproducers on PHP {version}", "",
+          f"Each config ran {a.repeats}x. **{len(failing)}/{len(rows)} still reproduce or cannot be judged.**", "",
           "| Reproducer | Category | Status | Detail |", "|---|---|---|---|"]
-    md += [f"| `{p}` | {r['category']} | {r['status']} | {r['detail']} |" for p, r in rows]
+    md += [f"| `{p}` | {r['category']} | {STATUS_ICON[r['status']]} {r['status']} | {r['detail']} |" for p, r in rows]
     md = "\n".join(md) + "\n"
+    details = "".join(f"<details{' open' if r['status'] in FAILING else ''}><summary>{p}: {r['status']}</summary>\n\n"
+                      f"{report(p, r)}\n</details>\n\n" for p, r in rows)
     with open(os.path.join(a.out, "results.json"), "w") as f:
         json.dump({"php": version, "results": dict(rows)}, f, indent=2)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
-            f.write(md)
+            f.write(md + "\n" + details)
     print(md)
-    sys.exit(0 if all(r["status"] == "confirmed" for _, r in rows) else 1)
+    # A reproducer that still fails means the bug is live; one that cannot be judged must not pass silently.
+    sys.exit(1 if failing else 0)
 
 
 if __name__ == "__main__":

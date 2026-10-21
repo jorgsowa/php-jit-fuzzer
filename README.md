@@ -15,4 +15,4 @@
 python3 .github/scripts/verify-reproducers.py --php /path/to/php reproducers/07-*.phpt
 ```
 
-The `Verify reproducers` workflow builds a debug PHP from the oldest php-src branch still receiving bug fixes (`PHP-8.4`) and runs the script. A PR runs only the reproducers it adds or changes, or all of them when it changes `.github/`. The weekly scheduled run checks all of them, so a reproducer that stops failing shows that its bug was fixed.
+The `Verify reproducers` workflow builds a debug PHP from the oldest php-src branch still receiving bug fixes (`PHP-8.4`) and runs the script. A PR runs only the reproducers it adds or changes, or all of them when it changes `.github/`. The weekly scheduled run checks all of them, so a reproducer that stops failing shows that its bug was fixed. The job fails while any reproducer is `confirmed`, `flaky`, `inconclusive` or `error`, and passes only when all are `not-reproduced`. Its summary lists each reproducer's runs, an expected/actual output diff and stderr, and each failing reproducer gets an error annotation.
