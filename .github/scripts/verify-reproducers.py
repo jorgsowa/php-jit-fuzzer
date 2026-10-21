@@ -193,8 +193,9 @@ def main():
     for phpt in a.phpts:
         try:
             r = verify(a.php, phpt, extra_ini, a.repeats, a.timeout, workdir, a.out)
+            # Report the label separately so the verification result stays visible.
             if labels is not None and r["category"] not in labels:
-                r = dict(r, status="error", detail=f"PR needs the `{r['category']}` label")
+                r = dict(r, missing_label=True, detail=f"{r['detail']}; PR needs the `{r['category']}` label")
         except Broken as e:
             r = {"category": "?", "test": "", "status": "error", "detail": str(e)}
         rows.append((phpt, r))
@@ -210,7 +211,7 @@ def main():
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(md)
     print(md)
-    sys.exit(0 if all(r["status"] == "confirmed" for _, r in rows) else 1)
+    sys.exit(0 if all(r["status"] == "confirmed" and not r.get("missing_label") for _, r in rows) else 1)
 
 
 if __name__ == "__main__":
