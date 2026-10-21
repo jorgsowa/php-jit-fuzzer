@@ -2,7 +2,7 @@
 """Confirm phpt reproducers: --EXPECT-- must match a clean run and the affected --INI-- config must break it.
 
 The phpt's opcache.jit value decides the category: off means an optimizer bug (clean run: no opcache),
-anything else a JIT bug (clean run: opcache.jit=off). Exits 1 while any reproducer still breaks PHP or cannot be judged.
+anything else a JIT bug (clean run: opcache.jit=off). A --SKIPIF-- printing "skip" excludes the PHP build. Exits 1 while any reproducer still breaks PHP or cannot be judged.
 """
 
 import argparse
@@ -23,7 +23,8 @@ BASE_INI = [
 CLEAN_INI = {"optimizer": ["opcache.enable=0", "opcache.enable_cli=0"], "jit": ["opcache.jit=off"]}
 JIT_OFF = {"off", "disable", "0"}
 FAILING = {"confirmed", "flaky", "inconclusive", "error"}
-STATUS_ICON = {"confirmed": "❌", "flaky": "⚠️", "inconclusive": "❓", "error": "❓", "not-reproduced": "✅"}
+STATUS_ICON = {"confirmed": "❌", "flaky": "⚠️", "inconclusive": "❓", "error": "❓", "not-reproduced": "✅",
+               "skipped": "⏭️"}
 MAX_BLOCK = 20000
 PROBE = """<?php
 $s = opcache_get_status(false);
@@ -76,11 +77,11 @@ def expectf_regex(pattern):
 
 
 def matches_expect(sections, out):
-    # run-tests.php compares with trailing whitespace trimmed and newlines normalised.
-    out = out.replace("\r\n", "\n").rstrip()
+    # run-tests.php compares with surrounding whitespace trimmed and newlines normalised.
+    out = out.replace("\r\n", "\n").strip()
     if "EXPECT" in sections:
-        return out == sections["EXPECT"].replace("\r\n", "\n").rstrip()
-    return expectf_regex(sections["EXPECTF"].replace("\r\n", "\n").rstrip()).fullmatch(out) is not None
+        return out == sections["EXPECT"].replace("\r\n", "\n").strip()
+    return expectf_regex(sections["EXPECTF"].replace("\r\n", "\n").strip()).fullmatch(out) is not None
 
 
 def run_php(php, path, ini, timeout):
@@ -118,6 +119,22 @@ def opcache_ini(php):
     sys.exit("error: Zend OPcache cannot be loaded")
 
 
+def skip_reason(php, sections, ini, workdir, timeout):
+    """The --SKIPIF-- reason when it skips this PHP build, else None."""
+    if not sections.get("SKIPIF", "").strip():
+        return None
+    path = os.path.join(workdir, "skipif.php")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(sections["SKIPIF"])
+    res = run_php(php, path, ini, timeout)
+    if res is None or res[0] != 0:
+        raise Broken(f"--SKIPIF-- failed: {res}")
+    out = res[1].strip()
+    if not out.lower().startswith("skip"):
+        return None
+    return out[4:].strip() or "skipped"
+
+
 def check_state(php, ini, want, workdir, timeout):
     """Refuse to judge a repro when opcache/JIT is not actually in the configured state."""
     path = os.path.join(workdir, "probe.php")
@@ -137,6 +154,9 @@ def verify(php, phpt, extra_ini, repeats, timeout, workdir, outdir):
     cat = category(ini)
     affected = extra_ini + BASE_INI + ini
     clean = affected + CLEAN_INI[cat]
+    reason = skip_reason(php, sections, affected, workdir, timeout)
+    if reason:
+        return {"category": cat, "test": sections["TEST"].strip(), "ini": ini, "status": "skipped", "detail": reason}
     check_state(php, affected, {"opcache": True, "jit": cat == "jit"}, workdir, timeout)
     check_state(php, clean, {"opcache": cat == "jit", "jit": False}, workdir, timeout)
 
@@ -215,8 +235,8 @@ def report(phpt, r):
     lines.append("")
     run = example_run(r)
     if run and r.get("expected") is not None:
-        diff = difflib.unified_diff(r["expected"].replace("\r\n", "\n").rstrip().splitlines(),
-                                    run["stdout"].replace("\r\n", "\n").rstrip().splitlines(),
+        diff = difflib.unified_diff(r["expected"].replace("\r\n", "\n").strip().splitlines(),
+                                    run["stdout"].replace("\r\n", "\n").strip().splitlines(),
                                     "expected", "actual", lineterm="")
         diff = "\n".join(diff)
         if diff:

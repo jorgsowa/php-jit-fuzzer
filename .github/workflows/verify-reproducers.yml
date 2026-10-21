@@ -8,8 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       php-branch:
-        description: php-src branch to test
-        default: PHP-8.4
+        description: php-src branch to test (default: all of PHP-8.4, PHP-8.5, master)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -17,10 +16,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  # Oldest php-src branch still receiving bug fixes.
-  PHP_BRANCH: ${{ inputs.php-branch || 'PHP-8.4' }}
 
 jobs:
   select:
@@ -51,6 +46,13 @@ jobs:
     if: needs.select.outputs.files != ''
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # From the oldest php-src branch still receiving bug fixes; --SKIPIF-- excludes branches per reproducer.
+        php-branch: ${{ fromJSON(inputs.php-branch && format('["{0}"]', inputs.php-branch) || '["PHP-8.4", "PHP-8.5", "master"]') }}
+    env:
+      PHP_BRANCH: ${{ matrix.php-branch }}
     steps:
       - uses: actions/checkout@v7
 
@@ -98,6 +100,6 @@ jobs:
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: verify-reproducers
+          name: verify-reproducers-${{ matrix.php-branch }}
           path: verify-out
           if-no-files-found: ignore
