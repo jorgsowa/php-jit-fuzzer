@@ -1,18 +1,12 @@
 # php-jit-fuzzer
 
-## Reproducers
+Bugs found by differential fuzzing of the PHP JIT. Each program runs with `opcache.jit=off` (opcache and optimizer on) and under one or more JIT modes. Any difference in output, exit status, assertions, sanitizer reports or leak reports is a finding.
 
-`reproducers/*.phpt` are upstream-style tests for confirmed findings. `--EXPECT--` (or `--EXPECTF--`) holds the correct output, and `--INI--` holds the settings that break it. `--INI--` must set `opcache.jit` exactly once. That value alone decides the category:
+## Structure
 
-| `opcache.jit` | Category | Clean run | Affected run |
-|---|---|---|---|
-| `off`, `disable`, `0` | optimizer | opcache off | opcache on, `--INI--` |
-| any JIT mode | JIT | opcache on, `opcache.jit=off` | opcache on, `--INI--` |
+- `findings/README.md`: the list of findings by category, with the affected JIT mode, the first affected PHP version and the cause where known.
+- `findings/NN-<mode>-<summary>/repro.php`: a minimal reproducer for each finding.
+- `findings/raw*/<kind>-<hash>/`: raw fuzzer cases, where `<kind>` is `output`, `leak` or `crash`. Each holds the generated `test.php`, its `reduced.php`, the output of every mode (`out.<mode>.txt`) and the mismatch summary (`info.txt`).
+- `reproducers/NN-*.phpt`: upstream-style tests for confirmed findings. `--EXPECT--` holds the correct output and `--INI--` the settings that break it. The `opcache.jit` value in `--INI--` decides whether it is an optimizer or a JIT bug.
 
-`.github/scripts/verify-reproducers.py` checks that opcache and the JIT are really in each state, then runs both configs 3 times. A reproducer is `confirmed` only if every clean run matches the expected output and every affected run differs from it, crashes, asserts or leaks.
-
-```sh
-python3 .github/scripts/verify-reproducers.py --php /path/to/php reproducers/07-*.phpt
-```
-
-The `Verify reproducers` workflow builds a debug PHP from the oldest php-src branch still receiving bug fixes (`PHP-8.4`) and runs the script. A PR runs only the reproducers it adds or changes, or all of them when it changes `.github/`. The weekly scheduled run checks all of them, so a reproducer that stops failing shows that its bug was fixed. The job fails while any reproducer is `confirmed`, `flaky`, `inconclusive` or `error`, and passes only when all are `not-reproduced`. Its summary lists each reproducer's runs, an expected/actual output diff and stderr, and each failing reproducer gets an error annotation.
+The `Verify reproducers` workflow runs the reproducers on a debug build of `PHP-8.4` and fails while any still breaks PHP, so a reproducer that starts passing shows its bug was fixed.
