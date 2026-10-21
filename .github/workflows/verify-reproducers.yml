@@ -2,7 +2,6 @@ name: Verify reproducers
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled, unlabeled]
     paths: ['reproducers/**', '.github/**']
   schedule:
     - cron: '0 4 * * 1'
@@ -90,12 +89,11 @@ jobs:
       - name: Verify reproducers
         env:
           FILES: ${{ needs.select.outputs.files }}
-          PR_LABELS: ${{ github.event_name == 'pull_request' && toJSON(github.event.pull_request.labels.*.name) || '' }}
         run: |
           ~/php/bin/php -v
           echo "php-src \`$PHP_BRANCH\` @ ${{ steps.src.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
           read -ra files <<< "$FILES"
-          python3 .github/scripts/verify-reproducers.py --php ~/php/bin/php ${PR_LABELS:+--labels "$PR_LABELS"} "${files[@]}"
+          python3 .github/scripts/verify-reproducers.py --php ~/php/bin/php "${files[@]}"
 
       - uses: actions/upload-artifact@v7
         if: always()

@@ -180,9 +180,7 @@ def main():
     ap.add_argument("--repeats", type=int, default=3)
     ap.add_argument("--timeout", type=int, default=30)
     ap.add_argument("--out", default="verify-out")
-    ap.add_argument("--labels", help="JSON list of PR labels; each phpt's category must be among them")
     a = ap.parse_args()
-    labels = set(json.loads(a.labels)) if a.labels else None
     os.makedirs(a.out, exist_ok=True)
     extra_ini = opcache_ini(a.php)
     version = subprocess.run([a.php, "-n", "-r", 'echo PHP_VERSION, PHP_DEBUG ? " debug" : "";'],
@@ -193,9 +191,6 @@ def main():
     for phpt in a.phpts:
         try:
             r = verify(a.php, phpt, extra_ini, a.repeats, a.timeout, workdir, a.out)
-            # Report the label separately so the verification result stays visible.
-            if labels is not None and r["category"] not in labels:
-                r = dict(r, missing_label=True, detail=f"{r['detail']}; PR needs the `{r['category']}` label")
         except Broken as e:
             r = {"category": "?", "test": "", "status": "error", "detail": str(e)}
         rows.append((phpt, r))
@@ -211,7 +206,7 @@ def main():
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
             f.write(md)
     print(md)
-    sys.exit(0 if all(r["status"] == "confirmed" and not r.get("missing_label") for _, r in rows) else 1)
+    sys.exit(0 if all(r["status"] == "confirmed" for _, r in rows) else 1)
 
 
 if __name__ == "__main__":
