@@ -3,8 +3,6 @@ name: Verify reproducers
 on:
   pull_request:
     paths: ['reproducers/**', '.github/**']
-  schedule:
-    - cron: '0 4 * * 1'
   workflow_dispatch:
     inputs:
       php-branch:
