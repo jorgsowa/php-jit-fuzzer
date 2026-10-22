@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       php-branch:
-        description: 'php-src branch to test (default: all of PHP-8.4, PHP-8.5, master)'
+        description: 'php-src branch to test (default: all of PHP-8.4, PHP-8.5, PHP-8.6, master)'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -50,7 +50,7 @@ jobs:
       fail-fast: false
       matrix:
         # From the oldest php-src branch still receiving bug fixes; --SKIPIF-- excludes branches per reproducer.
-        php-branch: ${{ fromJSON(inputs.php-branch && format('["{0}"]', inputs.php-branch) || '["PHP-8.4", "PHP-8.5", "master"]') }}
+        php-branch: ${{ fromJSON(inputs.php-branch && format('["{0}"]', inputs.php-branch) || '["PHP-8.4", "PHP-8.5", "PHP-8.6", "master"]') }}
     env:
       PHP_BRANCH: ${{ matrix.php-branch }}
     steps:
